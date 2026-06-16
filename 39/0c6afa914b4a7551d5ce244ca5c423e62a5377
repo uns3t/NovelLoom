@@ -1,0 +1,16 @@
+apps/server/src/routes/aiWorkspace.ts
+  h_458067ff9edf5c 104-105,205,231,233,277,391,397,406-407,416,482,601,647,727,761,823,872,882,901,932,1003,1036,1045,1063,1083,1146,1252,1254-1255,1258,1311,1326,1409
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "390c6afa914b4a7551d5ce244ca5c423e62a5377",
+  "prompts": {},
+  "humans": {
+    "h_458067ff9edf5c": {
+      "author": "zhangshiyu.0 <32424222+uns3t@users.noreply.github.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
