@@ -6,3 +6,5 @@ dist
 *.log
 .vite
 .turbo
+/data
+.trae
