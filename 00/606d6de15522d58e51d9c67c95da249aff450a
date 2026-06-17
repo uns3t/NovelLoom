@@ -1,0 +1,14 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "00606d6de15522d58e51d9c67c95da249aff450a",
+  "prompts": {},
+  "humans": {
+    "h_458067ff9edf5c": {
+      "author": "zhangshiyu.0 <32424222+uns3t@users.noreply.github.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
