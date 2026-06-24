@@ -24,6 +24,8 @@ import {
   PROJECT_FILE_PATH_MAX_LEN,
   PROJECT_FILE_PATH_SEGMENT_MAX_LEN,
   PROJECT_FILE_PATH_REGEX,
+  STYLE_SAMPLE_FILE,
+  STYLE_SAMPLE_TEMPLATE,
   STORY_STATUS_FILE,
   STORY_STATUS_TEMPLATE,
   type ProjectFileDoc,
@@ -352,6 +354,10 @@ async function ensureDefaultProjectFiles(bookId: string): Promise<void> {
   const novelSpecPath = projectFilePath(bookId, NOVEL_SPEC_FILE);
   if (!(await pathExists(novelSpecPath))) {
     await fs.writeFile(novelSpecPath, NOVEL_SPEC_TEMPLATE, "utf8");
+  }
+  const styleSamplePath = projectFilePath(bookId, STYLE_SAMPLE_FILE);
+  if (!(await pathExists(styleSamplePath))) {
+    await fs.writeFile(styleSamplePath, STYLE_SAMPLE_TEMPLATE, "utf8");
   }
 }
 
@@ -829,6 +835,7 @@ export async function createBook(title: string): Promise<BookMeta> {
     "utf8",
   );
   await fs.writeFile(path.join(dir, NOVEL_SPEC_FILE), NOVEL_SPEC_TEMPLATE, "utf8");
+  await fs.writeFile(path.join(dir, STYLE_SAMPLE_FILE), STYLE_SAMPLE_TEMPLATE, "utf8");
   await fs.writeFile(path.join(dir, PLOT_FILE), PLOT_TEMPLATE, "utf8");
   await fs.writeFile(path.join(dir, USER_IDEA_FILE), NEW_BOOK_USER_IDEA_TEMPLATE, "utf8");
   await fs.writeFile(path.join(dir, STORY_STATUS_FILE), STORY_STATUS_TEMPLATE, "utf8");
@@ -988,6 +995,33 @@ export async function writeProjectFile(
       throw new NotFoundError(`File not found: ${normalized}`);
     }
     throw err;
+  }
+  await fs.writeFile(filePath, content, "utf8");
+  await touchBook(bookId);
+  return await readProjectFile(bookId, normalized);
+}
+
+export async function upsertProjectFile(
+  bookId: string,
+  projectPath: string,
+  content: string,
+): Promise<ProjectFileDoc> {
+  if (content.length > MARKDOWN_MAX_LEN) {
+    throw new InvalidIdError("File content is too large");
+  }
+  await readBookMeta(bookId);
+  const normalized = normalizeProjectPath(projectPath);
+  const filePath = projectFilePath(bookId, normalized);
+  try {
+    const stat = await fs.stat(filePath);
+    if (!stat.isFile()) {
+      throw new ConflictError(`Project path is not a file: ${normalized}`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
   }
   await fs.writeFile(filePath, content, "utf8");
   await touchBook(bookId);

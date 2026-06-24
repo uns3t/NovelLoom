@@ -69,6 +69,9 @@ export const NOVEL_SPEC_FILE = "novel-spec.md";
 /** Root-level Markdown file for long-running plot planning. */
 export const PLOT_FILE = "plot.md";
 
+/** Root-level Markdown file for per-book writing style examples. */
+export const STYLE_SAMPLE_FILE = "style-sample.md";
+
 /** Project-relative Markdown file for the currently planned chapter outline. */
 export const CURRENT_CHAPTER_OUTLINE_FILE = "outline/current.md";
 
@@ -78,7 +81,7 @@ export const OUTLINE_ARCHIVE_DIR = "outline/archive";
 /** Default lightweight per-book writing rules template. */
 export const NOVEL_SPEC_TEMPLATE = `# 创作规格
 
-> 这是本书的长期写作规格。初始灵感写在 \`idea.md\`，剧情规划写在 \`${PLOT_FILE}\`，进度写在 \`story-status.md\`，章节数量、单章字数、文风和结构规则写在本文件，人物和世界观事实写在 \`library/\`。
+> 这是本书的长期写作规格。初始灵感写在 \`idea.md\`，剧情规划写在 \`${PLOT_FILE}\`，进度写在 \`story-status.md\`，风格样例写在 \`${STYLE_SAMPLE_FILE}\`，章节数量、单章字数、文风和结构规则写在本文件，人物和世界观事实写在 \`library/\`。
 
 ## 结构
 
@@ -103,6 +106,24 @@ export const NOVEL_SPEC_TEMPLATE = `# 创作规格
 - 生成前先读取本文件、\`${PLOT_FILE}\`、\`story-status.md\`、相关资料库和大纲。
 - 正文应遵守结构、文风和创意规则。
 - 改变剧情规划、进度或设定时，同步更新对应文件。
+`;
+
+/** Default lightweight per-book writing style example template. */
+export const STYLE_SAMPLE_TEMPLATE = `# 写作风格示例
+
+## 风格说明
+
+这本书的语言应当如何呈现？可以用短句描述目标语感、叙事节奏、对白方式和描写密度。
+
+## 示例片段
+
+建议放 1500-2500 字你认可的正文片段。AI 生成细纲和正文时会参考这里的语感、节奏、对白方式和描写密度。
+
+## 模仿边界
+
+- 只参考语感、节奏、对白方式和描写密度。
+- 不复用样例中的具体句子、剧情、人物关系或设定。
+- 不为了模仿风格改变当前章节的剧情目标。
 `;
 
 /** Default long-running plot planning template shared by frontend and backend. */
@@ -259,6 +280,88 @@ export interface RenameProjectFileRequest {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Chapter batch generation                                                   */
+/* -------------------------------------------------------------------------- */
+
+export const CHAPTER_BATCH_MIN_CHAPTER = 1;
+export const CHAPTER_BATCH_MAX_CHAPTER = 9999;
+export const CHAPTER_BATCH_MAX_COUNT = 30;
+export const CHAPTER_BATCH_DEFAULT_OVERWRITE = true;
+
+export type ChapterBatchRunStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type ChapterBatchStepStatus =
+  | "pending"
+  | "outline_running"
+  | "outline_completed"
+  | "draft_running"
+  | "draft_completed"
+  | "outline_archived"
+  | "state_updated"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface StartChapterBatchRunRequest {
+  fromChapter: number;
+  toChapter: number;
+  overwrite?: boolean;
+  agentId?: string;
+}
+
+export interface ChapterBatchChapterSnapshot {
+  chapterNumber: number;
+  status: ChapterBatchStepStatus;
+  outlinePath: typeof CURRENT_CHAPTER_OUTLINE_FILE;
+  archivedOutlinePath?: string;
+  draftPath: string;
+  error?: string;
+  /** ISO timestamp. */
+  updatedAt: string;
+}
+
+export interface ChapterBatchRunEvent {
+  id: string;
+  chapterNumber?: number;
+  title: string;
+  detail: string;
+  /** ISO timestamp. */
+  createdAt: string;
+}
+
+export interface ChapterBatchRunSnapshot {
+  runId: string;
+  bookId: string;
+  status: ChapterBatchRunStatus;
+  fromChapter: number;
+  toChapter: number;
+  overwrite: boolean;
+  currentChapter: number | null;
+  chapters: ChapterBatchChapterSnapshot[];
+  events: ChapterBatchRunEvent[];
+  /** ISO timestamp. */
+  createdAt: string;
+  /** ISO timestamp. */
+  updatedAt: string;
+  /** ISO timestamp. */
+  finishedAt?: string;
+  error?: string;
+}
+
+export function chapterDraftPath(chapterNumber: number): string {
+  const normalized = Math.trunc(chapterNumber);
+  const padded =
+    normalized < 1000
+      ? String(normalized).padStart(3, "0")
+      : String(normalized);
+  return `chapters/chapter-${padded}.md`;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Knowledge base                                                             */
 /* -------------------------------------------------------------------------- */
 
@@ -333,7 +436,8 @@ export function knowledgeBaseTemplateFor(
   type: KnowledgeBaseItemType,
   title: string,
 ): string {
-  const safeTitle = title.trim() || KNOWLEDGE_BASE_TYPE_META[type].singularLabel;
+  const safeTitle =
+    title.trim() || KNOWLEDGE_BASE_TYPE_META[type].singularLabel;
   if (type === "character") {
     return `# ${safeTitle}
 
@@ -509,10 +613,7 @@ export interface AiDraftFileChange {
   draftContent: string;
 }
 
-export type AiDraftChangeSetStatus =
-  | "pending_review"
-  | "applied"
-  | "discarded";
+export type AiDraftChangeSetStatus = "pending_review" | "applied" | "discarded";
 
 export interface AiDraftChangeSet {
   runId: string;
@@ -770,6 +871,7 @@ export const NOVEL_SPEC_PROMPT_GUIDE = [
   `- ${NOVEL_SPEC_FILE} 是本书长期创作规格，记录结构、篇幅、文风、禁忌和创意原则。`,
   `- 生成大纲、细纲、正文、重写或审阅前，优先读取 ${NOVEL_SPEC_FILE} 的核心字段。`,
   `- ${NOVEL_SPEC_FILE} 规定怎么写，不承载具体剧情走向；剧情规划写入 ${PLOT_FILE}。`,
+  `- ${STYLE_SAMPLE_FILE} 承载可参考的具体风格样例；${NOVEL_SPEC_FILE} 只记录规则、目标和边界。`,
   `- ${NOVEL_SPEC_FILE} 为空或信息不足时，可基于 idea.md、资料库和用户回答轻量补全规格；剧情内容写入 ${PLOT_FILE} 或待确认。`,
 ].join("\n");
 
@@ -845,6 +947,7 @@ export const AI_SLASH_COMMANDS: AiSlashCommandDefinition[] = [
       "生成或更新当前章节细纲；未指定目标章节时先问。",
       `只创建或更新 ${CURRENT_CHAPTER_OUTLINE_FILE}，承接总纲、资料库和最近正文。`,
       `细纲写目标章节、正文文件、章节功能、节拍、人物变化和前后文衔接；短同步 ${STORY_STATUS_FILE}。`,
+      `按需读取 ${STYLE_SAMPLE_FILE}，让章节节拍、叙事密度和对白安排贴合目标风格。`,
     ].join("\n"),
     executionHint: `只创建或更新 ${CURRENT_CHAPTER_OUTLINE_FILE}，并以短快照同步 ${STORY_STATUS_FILE}。`,
   },
@@ -875,7 +978,8 @@ export const AI_SLASH_COMMANDS: AiSlashCommandDefinition[] = [
     label: "续写",
     description: "读取设定和已有章节，自动创建下一章正文",
     prompt: [
-      `续写下一章：读规格、状态、资料库、总纲、${CURRENT_CHAPTER_OUTLINE_FILE} 和最近正文。`,
+      `续写下一章：读规格、状态、资料库、总纲、${CURRENT_CHAPTER_OUTLINE_FILE} 、最近正文、${STYLE_SAMPLE_FILE}。`,
+      "参考风格样例的语感、节奏和对白方式，但不要复用原句或样例情节。",
       "先核对当前细纲是否匹配目标章节；不匹配则请用户确认或先运行 /detail。",
       `推断并创建新章节，不覆盖已有章节；同步 ${STORY_STATUS_FILE}。`,
     ].join("\n"),
@@ -887,7 +991,8 @@ export const AI_SLASH_COMMANDS: AiSlashCommandDefinition[] = [
     description: "根据用户指出范围，自动重写并覆盖",
     prompt: [
       "重写或润色用户指定范围；范围不明先问 1-3 个问题。",
-      "读规格、目标文件和必要上下文；可覆盖目标文件但保留核心情节、人物意图、设定和 Markdown 结构。",
+      `读规格、目标文件和必要上下文；可覆盖目标文件但保留核心情节、人物意图、设定、${STYLE_SAMPLE_FILE}和 Markdown 结构。`,
+      "参考风格样例统一语言质感，但不要复用原句、样例情节或人物关系。",
       `进度或事实变化时同步 ${STORY_STATUS_FILE} 或资料库；纯语言润色只改目标文本。`,
     ].join("\n"),
     executionHint: `可自动覆盖用户指出的目标文件；关键事实变化时以短快照同步 ${STORY_STATUS_FILE}。`,
@@ -896,7 +1001,8 @@ export const AI_SLASH_COMMANDS: AiSlashCommandDefinition[] = [
     name: "/ask",
     label: "先提问题",
     description: "让 AI 先问 3 个需要确认的问题",
-    prompt: "请先问最多 3 个影响创作方向的问题，并说明下一步会优先读取哪些项目资料。",
+    prompt:
+      "请先问最多 3 个影响创作方向的问题，并说明下一步会优先读取哪些项目资料。",
   },
 ];
 
@@ -917,7 +1023,7 @@ export function promptForAiSlashCommand(
     [
       "通用边界：",
       "- 用户本轮要求优先；先读必要文件，未读不当事实。",
-      `- ${NOVEL_SPEC_FILE} 管写法；${STORY_STATUS_FILE} 管当前快照。`,
+      `- ${NOVEL_SPEC_FILE} 管写法；${STORY_STATUS_FILE} 管当前快照；${STYLE_SAMPLE_FILE} 是风格样例。`,
       "- 资料库和已写正文优先；冲突列待确认，不直接覆盖事实。",
       "- 人物/世界观/物品设定分别写入 library/characters、library/world、library/items。",
       "- 写入型任务最终说明读取、改动和待确认。",
@@ -927,7 +1033,9 @@ export function promptForAiSlashCommand(
   return parts.join("\n");
 }
 
-export function toAiPresetSlashCommand(command: AiSlashCommandDefinition): AiPresetSlashCommand {
+export function toAiPresetSlashCommand(
+  command: AiSlashCommandDefinition,
+): AiPresetSlashCommand {
   return {
     name: command.name,
     label: command.label,

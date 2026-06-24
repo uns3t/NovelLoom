@@ -1,6 +1,7 @@
 import {
   Fragment,
   memo,
+  type FormEvent,
   type MouseEvent as ReactMouseEvent,
   useCallback,
   useEffect,
@@ -15,6 +16,7 @@ import {
   Check,
   ChevronDown,
   FileDiff,
+  ListChecks,
   MessageSquare,
   MessageSquarePlus,
   Send,
@@ -33,6 +35,13 @@ import type {
   ProjectFileOperation,
 } from "@novelloom/shared";
 import {
+  CHAPTER_BATCH_MAX_COUNT,
+  CURRENT_CHAPTER_OUTLINE_FILE,
+  STYLE_SAMPLE_FILE,
+  STORY_STATUS_FILE,
+  chapterDraftPath,
+} from "@novelloom/shared";
+import {
   promptForSlashCommand,
   SLASH_COMMANDS,
   type SlashCommand,
@@ -43,6 +52,7 @@ import {
   AiWorkspaceRunApiError,
   aiWorkspaceRunsApi,
 } from "../api/aiWorkspaceRuns";
+import { projectFilesApi } from "../api/projectFiles";
 import { ConfirmModal, Modal } from "./Modal";
 
 interface FileChangeRefreshOptions {
@@ -127,6 +137,34 @@ interface SlashCommandQuery {
   };
 }
 
+type ChapterBatchFlowPhase = "outline" | "draft" | "archive" | "state";
+type ChapterBatchFlowStatus = "running" | "completed" | "failed" | "cancelled";
+
+interface ChapterBatchFlowState {
+  id: string;
+  fromChapter: number;
+  toChapter: number;
+  currentChapter: number;
+  phase: ChapterBatchFlowPhase;
+  status: ChapterBatchFlowStatus;
+  error?: string;
+}
+
+interface RunWorkspaceTurnOptions {
+  text: string;
+  sessionId: string;
+  commandName?: string;
+  readOnly?: boolean;
+  contextPaths?: string[];
+  autoApply?: boolean;
+  requireAppliedChanges?: boolean;
+}
+
+interface RunWorkspaceTurnResult {
+  snapshot: AiWorkspaceRunSnapshot<UIMessage>;
+  appliedPaths: string[];
+}
+
 function createSession(index: number): AiSessionRecordWithMessages {
   const now = new Date().toISOString();
   return {
@@ -172,6 +210,14 @@ function createUserMessage(text: string): UIMessage {
   return {
     id: `user-${Date.now()}`,
     role: "user",
+    parts: [{ type: "text", text }],
+  } as UIMessage;
+}
+
+function createAssistantNotice(text: string): UIMessage {
+  return {
+    id: `assistant-notice-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    role: "assistant",
     parts: [{ type: "text", text }],
   } as UIMessage;
 }
@@ -267,6 +313,78 @@ function formatConflictError(conflicts: string[]): string {
   return conflicts.length > 0
     ? `检测到文件已变化：${conflicts.join("、")}。请手动处理后重新让 AI 生成。`
     : "检测到文件已变化。请手动处理后重新让 AI 生成。";
+}
+
+function affectedBatchPaths(fromChapter: number, toChapter: number): string[] {
+  const paths = [CURRENT_CHAPTER_OUTLINE_FILE, STORY_STATUS_FILE];
+  for (let chapter = fromChapter; chapter <= toChapter; chapter += 1) {
+    paths.push(chapterDraftPath(chapter));
+  }
+  return paths;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function batchOutlinePrompt(
+  chapterNumber: number,
+  fromChapter: number,
+  toChapter: number,
+): string {
+  const draftPath = chapterDraftPath(chapterNumber);
+  return [
+    `批量章节生成：第 ${chapterNumber} 章 / 共 ${toChapter - fromChapter + 1} 章，步骤 1/3：生成当前章节细纲。`,
+    "",
+    `请读取必要项目资料：idea.md、novel-spec.md、${STYLE_SAMPLE_FILE}、plot.md、${STORY_STATUS_FILE}、outline/index.md、资料库、最近章节正文。`,
+    `目标章节：第 ${chapterNumber} 章。`,
+    `目标正文文件：${draftPath}。`,
+    `请创建或覆盖 ${CURRENT_CHAPTER_OUTLINE_FILE}。`,
+    `只写入 ${CURRENT_CHAPTER_OUTLINE_FILE}，不写正文，不归档细纲，不更新 ${STORY_STATUS_FILE}。`,
+    "细纲应包含目标章节、对应正文文件、章节功能、场景节拍、人物变化、伏笔/回收、与前后文衔接。",
+    "完成后说明读取了哪些资料、写入了什么、还有哪些待确认。",
+  ].join("\n");
+}
+
+function batchDraftPrompt(
+  chapterNumber: number,
+  fromChapter: number,
+  toChapter: number,
+): string {
+  const draftPath = chapterDraftPath(chapterNumber);
+  return [
+    `批量章节生成：第 ${chapterNumber} 章 / 共 ${toChapter - fromChapter + 1} 章，步骤 2/3：根据当前细纲生成章节正文。`,
+    "",
+    `请读取 ${CURRENT_CHAPTER_OUTLINE_FILE}、novel-spec.md、${STYLE_SAMPLE_FILE}、${STORY_STATUS_FILE}、资料库、总纲和最近章节正文。`,
+    `目标章节：第 ${chapterNumber} 章。`,
+    `目标正文文件：${draftPath}。`,
+    `请创建或覆盖 ${draftPath}。`,
+    `只写入该章节正文文件，不归档细纲，不更新 ${STORY_STATUS_FILE}。`,
+    "必须遵守当前细纲、创作规格、已写事实和用户最新上下文。",
+    "完成后说明读取了哪些资料、写入了什么、还有哪些待确认。",
+  ].join("\n");
+}
+
+function batchStatePrompt(
+  chapterNumber: number,
+  fromChapter: number,
+  toChapter: number,
+  archivedOutlinePath: string,
+): string {
+  const draftPath = chapterDraftPath(chapterNumber);
+  return [
+    `批量章节生成：第 ${chapterNumber} 章 / 共 ${toChapter - fromChapter + 1} 章，步骤 3/3：更新创作状态。`,
+    "",
+    `当前第 ${chapterNumber} 章正文文件：${draftPath}。`,
+    `本章细纲已归档到：${archivedOutlinePath}`,
+    `请读取 ${STORY_STATUS_FILE}、${draftPath}、必要资料库和总纲。`,
+    `只创建或覆盖 ${STORY_STATUS_FILE}。`,
+    "请更新当前进度、最近上下文、下一步、待确认和需要延续事项。",
+    "不要写长期剧情规划；长期规划仍属于 plot.md。",
+    "完成后说明读取了哪些资料、写入了什么、还有哪些待确认。",
+  ].join("\n");
 }
 
 function isToolPart(
@@ -1265,6 +1383,99 @@ function SessionPicker({
   );
 }
 
+function ChapterBatchStartModal({
+  open,
+  fromChapter,
+  toChapter,
+  error,
+  pending,
+  onChangeFrom,
+  onChangeTo,
+  onSubmit,
+  onCancel,
+}: {
+  open: boolean;
+  fromChapter: string;
+  toChapter: string;
+  error: string | null;
+  pending: boolean;
+  onChangeFrom(value: string): void;
+  onChangeTo(value: string): void;
+  onSubmit(): void;
+  onCancel(): void;
+}) {
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!pending) onSubmit();
+  }
+
+  return (
+    <Modal
+      open={open}
+      title="批量生成章节"
+      description={`按章节顺序直接覆盖写入当前细纲、章节正文和创作状态；单次最多 ${CHAPTER_BATCH_MAX_COUNT} 章。`}
+      onClose={() => {
+        if (!pending) onCancel();
+      }}
+      footer={
+        <>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={onCancel}
+            disabled={pending}
+          >
+            取消
+          </button>
+          <button
+            type="submit"
+            form="chapter-batch-form"
+            className="icon-button primary"
+            disabled={pending}
+          >
+            {pending ? "启动中..." : "开始生成"}
+          </button>
+        </>
+      }
+    >
+      <form
+        id="chapter-batch-form"
+        className="modal-form chapter-batch-form"
+        onSubmit={handleSubmit}
+      >
+        <label className="modal-field">
+          <span>起始章节</span>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={fromChapter}
+            onChange={(event) => onChangeFrom(event.target.value)}
+            disabled={pending}
+          />
+        </label>
+        <label className="modal-field">
+          <span>结束章节</span>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={toChapter}
+            onChange={(event) => onChangeTo(event.target.value)}
+            disabled={pending}
+          />
+        </label>
+        <div className="ai-batch-modal-note">
+          将复用 <code>{CURRENT_CHAPTER_OUTLINE_FILE}</code> 生成每章细纲，
+          正文完成后归档当前细纲，并更新 <code>{STORY_STATUS_FILE}</code>。
+          默认允许覆盖已有章节正文。
+        </div>
+        {error && <div className="modal-error">{error}</div>}
+      </form>
+    </Modal>
+  );
+}
+
 export function AiCollaborationPanel({
   bookId,
   selectedPath,
@@ -1307,6 +1518,15 @@ export function AiCollaborationPanel({
   const [pendingApplyPaths, setPendingApplyPaths] = useState<
     string[] | undefined
   >(undefined);
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [batchFromChapter, setBatchFromChapter] = useState("1");
+  const [batchToChapter, setBatchToChapter] = useState("1");
+  const [batchStarting, setBatchStarting] = useState(false);
+  const [batchCancelling, setBatchCancelling] = useState(false);
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const [batchFlow, setBatchFlow] = useState<ChapterBatchFlowState | null>(
+    null,
+  );
   const selectedPathRef = useRef<string | null>(selectedPath);
   const activeSessionIdRef = useRef(activeSessionId);
   const activeAgentIdRef = useRef<string | null>(activeAgentId);
@@ -1324,6 +1544,8 @@ export function AiCollaborationPanel({
   const busyRef = useRef(false);
   const seenEventKeysRef = useRef<Set<string>>(new Set());
   const seenChangesRef = useRef<Set<string>>(new Set());
+  const batchCancelRequestedRef = useRef(false);
+  const batchOrchestratingRef = useRef(false);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
@@ -1447,6 +1669,7 @@ export function AiCollaborationPanel({
 
   const messages = activeSession.messages;
   const busy = activeSession.activeRunStatus === "running";
+  const batchBusy = batchFlow?.status === "running";
   busyRef.current = busy;
   const input = activeSession.input;
   const activeUsage = usageBySessionId[activeSession.id];
@@ -1472,10 +1695,6 @@ export function AiCollaborationPanel({
     hasDraftWriteEvents &&
     !activePendingChanges &&
     activeSession.activeRunStatus === "running";
-  const showDraftMissingHint =
-    hasDraftWriteEvents &&
-    !activePendingChanges &&
-    activeSession.activeRunStatus === "completed";
   const latestMessageId = messages.at(-1)?.id;
   const turns = useMemo(() => buildAiTurns(messages), [messages]);
   const visibleTurns = useMemo(
@@ -1498,7 +1717,7 @@ export function AiCollaborationPanel({
       return haystack.includes(slashQuery);
     });
   }, [slashQuery]);
-  const commandMenuOpen = slashCommandQuery !== null && !busy;
+  const commandMenuOpen = slashCommandQuery !== null && !busy && !batchBusy;
 
   function scheduleHistorySave(delayMs: number, replaceExisting = false) {
     if (saveTimerRef.current) {
@@ -1596,6 +1815,8 @@ export function AiCollaborationPanel({
     seenEventKeysRef.current.clear();
     seenChangesRef.current.clear();
     clearRunPollTimer();
+    batchCancelRequestedRef.current = false;
+    batchOrchestratingRef.current = false;
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
@@ -1603,6 +1824,9 @@ export function AiCollaborationPanel({
     setHistoryLoading(true);
     setHistoryError(null);
     setHistorySaveError(null);
+    setBatchError(null);
+    setBatchFlow(null);
+    setBatchModalOpen(false);
     setSessionIndex(1);
     setSessions([fallbackSession]);
     setActiveSessionId(fallbackSession.id);
@@ -1676,6 +1900,8 @@ export function AiCollaborationPanel({
         saveTimerRef.current = null;
       }
       clearRunPollTimer();
+      batchCancelRequestedRef.current = true;
+      batchOrchestratingRef.current = false;
     };
   }, [bookId]);
 
@@ -1754,9 +1980,135 @@ export function AiCollaborationPanel({
     setComposerCaretPosition(element.selectionStart);
   }
 
+  function appendBatchNotice(
+    text: string,
+    sessionId = activeSessionIdRef.current,
+  ) {
+    const notice = createAssistantNotice(text);
+    const now = new Date().toISOString();
+    setSessions((current) =>
+      current.map((session) =>
+        session.id === sessionId
+          ? {
+              ...session,
+              messages: [...session.messages, notice],
+              updatedAt: now,
+            }
+          : session,
+      ),
+    );
+    if (sessionId === activeSessionIdRef.current) {
+      latestMessagesRef.current = [...latestMessagesRef.current, notice];
+    }
+  }
+
+  async function autoApplyRunChanges(
+    snapshot: AiWorkspaceRunSnapshot<UIMessage>,
+    requireAppliedChanges: boolean,
+  ): Promise<string[]> {
+    const files = snapshot.pendingChanges?.files ?? [];
+    if (requireAppliedChanges && files.length === 0) {
+      throw new Error("AI 未生成可应用的文件变更，批量流程已停止。");
+    }
+
+    const changedPaths = files.map((file) => file.path);
+    try {
+      const result = await aiWorkspaceRunsApi.applyChanges(
+        bookId,
+        snapshot.runId,
+      );
+      updatePendingChangesForSession(snapshot.sessionId, result.pendingChanges);
+      onFilesChanged(undefined, {
+        changedPaths,
+        reloadCurrent: true,
+      });
+      return changedPaths;
+    } catch (err) {
+      if (err instanceof AiWorkspaceRunApiError && err.status === 409) {
+        throw new Error(formatConflictError(err.conflicts));
+      }
+      if (err instanceof AiWorkspaceRunApiError && err.status === 404) {
+        throw new Error(
+          "待应用草稿所在的 AI run 已不存在，可能是后端重启导致。批量流程已停止。",
+        );
+      }
+      throw err;
+    }
+  }
+
+  async function runWorkspaceTurn({
+    text,
+    sessionId,
+    commandName,
+    readOnly,
+    contextPaths,
+    autoApply,
+    requireAppliedChanges,
+  }: RunWorkspaceTurnOptions): Promise<RunWorkspaceTurnResult> {
+    const now = new Date().toISOString();
+    const userMessage = createUserMessage(text);
+    const baseMessages =
+      sessionId === activeSessionIdRef.current
+        ? latestMessagesRef.current
+        : (sessions.find((session) => session.id === sessionId)?.messages ??
+          []);
+    const nextMessages = [...baseMessages, userMessage];
+    setSessions((current) =>
+      current.map((session) =>
+        session.id === sessionId
+          ? {
+              ...session,
+              input: "",
+              messages: nextMessages,
+              events: [],
+              pendingChanges: undefined,
+              activeRunStatus: "running",
+              activeRunId: undefined,
+              updatedAt: now,
+            }
+          : session,
+      ),
+    );
+    if (sessionId === activeSessionIdRef.current) {
+      latestMessagesRef.current = nextMessages;
+    }
+    setRunError(null);
+    setReviewError(null);
+
+    let snapshot = await aiWorkspaceRunsApi.start(bookId, {
+      sessionId,
+      messages: nextMessages,
+      mode: "workspace",
+      agentId: activeAgentIdRef.current ?? undefined,
+      commandName,
+      readOnly,
+      contextPaths,
+    });
+    applyRunSnapshot(snapshot);
+
+    while (snapshot.status === "running") {
+      await wait(RUN_POLL_INTERVAL_MS);
+      snapshot = await aiWorkspaceRunsApi.get(bookId, snapshot.runId);
+      applyRunSnapshot(snapshot);
+    }
+
+    if (autoApply && snapshot.status !== "completed") {
+      throw new Error(
+        snapshot.status === "cancelled"
+          ? "AI 运行已取消，批量流程已停止。"
+          : (snapshot.error ?? "AI 运行失败，批量流程已停止。"),
+      );
+    }
+
+    const appliedPaths = autoApply
+      ? await autoApplyRunChanges(snapshot, Boolean(requireAppliedChanges))
+      : [];
+    return { snapshot, appliedPaths };
+  }
+
   async function submit(nextText?: string) {
     const text = (nextText ?? input).trim();
-    if (!text || busy) return;
+    if (!text || busy || batchBusy) return;
     const parsedCommand = parseSlashCommandInput(text);
     const messageText = parsedCommand
       ? promptForCommand(parsedCommand.command, parsedCommand.userInstruction)
@@ -1826,6 +2178,229 @@ export function AiCollaborationPanel({
       applyRunSnapshot(snapshot);
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function parseBatchRange(): {
+    fromChapter: number;
+    toChapter: number;
+  } | null {
+    const fromChapter = Number(batchFromChapter);
+    const toChapter = Number(batchToChapter);
+    if (!Number.isInteger(fromChapter) || !Number.isInteger(toChapter)) {
+      setBatchError("章节范围必须是整数。");
+      return null;
+    }
+    if (fromChapter < 1 || toChapter < 1) {
+      setBatchError("章节编号必须大于等于 1。");
+      return null;
+    }
+    if (toChapter < fromChapter) {
+      setBatchError("结束章节不能小于起始章节。");
+      return null;
+    }
+    if (toChapter - fromChapter + 1 > CHAPTER_BATCH_MAX_COUNT) {
+      setBatchError(`单次最多生成 ${CHAPTER_BATCH_MAX_COUNT} 章。`);
+      return null;
+    }
+    return { fromChapter, toChapter };
+  }
+
+  function updateBatchFlow(
+    currentChapter: number,
+    phase: ChapterBatchFlowPhase,
+  ) {
+    setBatchFlow((current) =>
+      current
+        ? {
+            ...current,
+            currentChapter,
+            phase,
+          }
+        : current,
+    );
+  }
+
+  async function startBatchRun() {
+    if (busy || batchBusy || batchStarting) return;
+    const range = parseBatchRange();
+    if (!range) return;
+    const affectedPaths = affectedBatchPaths(
+      range.fromChapter,
+      range.toChapter,
+    );
+    if (
+      currentFileDirty &&
+      selectedPathRef.current &&
+      affectedPaths.includes(selectedPathRef.current)
+    ) {
+      setBatchError(
+        `当前未保存文件 ${selectedPathRef.current} 会被批量生成覆盖，请先保存后再启动。`,
+      );
+      return;
+    }
+
+    setBatchStarting(true);
+    setBatchError(null);
+    setReviewError(null);
+    setBatchModalOpen(false);
+    batchCancelRequestedRef.current = false;
+    batchOrchestratingRef.current = true;
+    const flowId = `chapter-batch-flow-${Date.now()}`;
+    const sessionId = activeSession.id;
+    setBatchFlow({
+      id: flowId,
+      fromChapter: range.fromChapter,
+      toChapter: range.toChapter,
+      currentChapter: range.fromChapter,
+      phase: "outline",
+      status: "running",
+    });
+    appendBatchNotice(
+      [
+        `批量章节生成已开始：第 ${range.fromChapter} 到第 ${range.toChapter} 章。`,
+        "接下来会像用户一样连续触发 AI 协作回合，并在每轮完成后自动应用文件草稿。",
+      ].join("\n"),
+      sessionId,
+    );
+    try {
+      for (
+        let chapterNumber = range.fromChapter;
+        chapterNumber <= range.toChapter;
+        chapterNumber += 1
+      ) {
+        if (batchCancelRequestedRef.current) {
+          throw new DOMException("Chapter batch flow cancelled", "AbortError");
+        }
+
+        updateBatchFlow(chapterNumber, "outline");
+        const outlineResult = await runWorkspaceTurn({
+          text: batchOutlinePrompt(
+            chapterNumber,
+            range.fromChapter,
+            range.toChapter,
+          ),
+          sessionId,
+          autoApply: true,
+          requireAppliedChanges: true,
+          contextPaths: [],
+        });
+        appendBatchNotice(
+          `第 ${chapterNumber} 章细纲草稿已自动应用：${outlineResult.appliedPaths.join("、")}。`,
+          sessionId,
+        );
+
+        if (batchCancelRequestedRef.current) {
+          throw new DOMException("Chapter batch flow cancelled", "AbortError");
+        }
+
+        updateBatchFlow(chapterNumber, "draft");
+        const draftResult = await runWorkspaceTurn({
+          text: batchDraftPrompt(
+            chapterNumber,
+            range.fromChapter,
+            range.toChapter,
+          ),
+          sessionId,
+          autoApply: true,
+          requireAppliedChanges: true,
+          contextPaths: [],
+        });
+        appendBatchNotice(
+          `第 ${chapterNumber} 章正文草稿已自动应用：${draftResult.appliedPaths.join("、")}。`,
+          sessionId,
+        );
+
+        if (batchCancelRequestedRef.current) {
+          throw new DOMException("Chapter batch flow cancelled", "AbortError");
+        }
+
+        updateBatchFlow(chapterNumber, "archive");
+        const archive = await projectFilesApi.archiveCurrentOutline(bookId);
+        onFilesChanged(undefined, {
+          changedPaths: [CURRENT_CHAPTER_OUTLINE_FILE, archive.archivedPath],
+          reloadCurrent: true,
+        });
+        appendBatchNotice(
+          `第 ${chapterNumber} 章当前细纲已归档到：${archive.archivedPath}。`,
+          sessionId,
+        );
+
+        if (batchCancelRequestedRef.current) {
+          throw new DOMException("Chapter batch flow cancelled", "AbortError");
+        }
+
+        updateBatchFlow(chapterNumber, "state");
+        const stateResult = await runWorkspaceTurn({
+          text: batchStatePrompt(
+            chapterNumber,
+            range.fromChapter,
+            range.toChapter,
+            archive.archivedPath,
+          ),
+          sessionId,
+          autoApply: true,
+          requireAppliedChanges: true,
+          contextPaths: [],
+        });
+        appendBatchNotice(
+          `第 ${chapterNumber} 章创作状态已自动应用：${stateResult.appliedPaths.join("、")}。`,
+          sessionId,
+        );
+      }
+
+      setBatchFlow((current) =>
+        current
+          ? {
+              ...current,
+              status: "completed",
+            }
+          : current,
+      );
+      appendBatchNotice(
+        `批量章节生成已完成：第 ${range.fromChapter} 到第 ${range.toChapter} 章。`,
+        sessionId,
+      );
+    } catch (err) {
+      const cancelled =
+        batchCancelRequestedRef.current ||
+        (err instanceof DOMException && err.name === "AbortError");
+      const message = cancelled
+        ? "批量章节生成已取消，已应用的文件不会回滚。"
+        : err instanceof Error
+          ? err.message
+          : String(err);
+      setBatchError(cancelled ? null : message);
+      setBatchFlow((current) =>
+        current
+          ? {
+              ...current,
+              status: cancelled ? "cancelled" : "failed",
+              error: cancelled ? undefined : message,
+            }
+          : current,
+      );
+      appendBatchNotice(message, sessionId);
+    } finally {
+      setBatchStarting(false);
+      setBatchCancelling(false);
+      batchOrchestratingRef.current = false;
+    }
+  }
+
+  async function cancelBatchRun() {
+    if (!batchBusy || batchCancelling) return;
+    batchCancelRequestedRef.current = true;
+    setBatchCancelling(true);
+    setBatchError(null);
+    const runId = activeSession.activeRunId;
+    try {
+      if (runId) {
+        const snapshot = await aiWorkspaceRunsApi.cancel(bookId, runId);
+        applyRunSnapshot(snapshot);
+      }
+    } catch (err) {
+      setBatchError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -2017,14 +2592,38 @@ export function AiCollaborationPanel({
             }))}
             placeholder="默认助手"
             loading={agentsLoading}
-            disabled={busy}
+            disabled={busy || batchBusy}
             onChange={setActiveAgentId}
           />
+          <button
+            className="btn-secondary icon-button"
+            onClick={() => {
+              if (batchBusy) {
+                void cancelBatchRun();
+                return;
+              }
+              setBatchError(null);
+              setBatchModalOpen(true);
+            }}
+            title={batchBusy ? "取消批量生成" : "批量生成章节"}
+            aria-label={batchBusy ? "取消批量生成" : "批量生成章节"}
+            disabled={busy && !batchBusy}
+          >
+            {batchBusy ? (
+              <Square size={13} aria-hidden="true" />
+            ) : (
+              <ListChecks size={13} aria-hidden="true" />
+            )}
+            <span>
+              {batchBusy ? (batchCancelling ? "取消中" : "取消") : "批量"}
+            </span>
+          </button>
           <button
             className="btn-secondary icon-button"
             onClick={newSession}
             title="创建新的 AI 会话"
             aria-label="创建新的 AI 会话"
+            disabled={batchBusy}
           >
             <MessageSquarePlus size={13} aria-hidden="true" />
           </button>
@@ -2051,6 +2650,9 @@ export function AiCollaborationPanel({
       )}
       {runError && (
         <div className="ai-history-status error">AI 运行失败：{runError}</div>
+      )}
+      {batchError && (
+        <div className="ai-history-status error">批量生成：{batchError}</div>
       )}
 
       <div className="ai-feed ai-transcript">
@@ -2127,6 +2729,11 @@ export function AiCollaborationPanel({
           onDiscard={(paths) => void discardPendingChanges(paths)}
         />
       )}
+      {showDraftWaitingHint && (
+        <div className="ai-run-status">
+          AI 已生成文件草稿，正在整理待审阅变更...
+        </div>
+      )}
 
       <div className="ai-composer">
         <div className="ai-composer-shell">
@@ -2184,26 +2791,31 @@ export function AiCollaborationPanel({
             onClick={(event) => syncComposerCaret(event.currentTarget)}
             onSelect={(event) => syncComposerCaret(event.currentTarget)}
             placeholder="描述任务，或输入 / 使用命令"
-            disabled={busy}
+            disabled={busy || batchBusy}
           />
           <div className="ai-composer-footer">
             <span className="ai-composer-hint">
-              输入 / 选择命令 · 例：/out、/check · Enter 发送
+              {batchBusy
+                ? `批量章节生成正在自动触发 AI 协作流程 · 第 ${batchFlow?.currentChapter ?? "-"} 章`
+                : "输入 / 选择命令 · 例：/out、/check · Enter 发送"}
             </span>
-            {busy ? (
+            {busy || batchBusy ? (
               <button
                 className="icon-button btn-secondary ai-send-button"
-                onClick={() => void cancelActiveRun()}
-                title="停止当前 AI 执行"
+                onClick={() =>
+                  batchBusy ? void cancelBatchRun() : void cancelActiveRun()
+                }
+                title={batchBusy ? "取消批量生成" : "停止当前 AI 执行"}
+                disabled={batchCancelling}
               >
                 <Square size={15} aria-hidden="true" />
-                <span>停止</span>
+                <span>{batchBusy ? "取消批量" : "停止"}</span>
               </button>
             ) : (
               <button
                 className="icon-button primary ai-send-button"
                 onClick={() => void submit()}
-                disabled={!input.trim()}
+                disabled={!input.trim() || batchBusy}
               >
                 <Send size={15} aria-hidden="true" />
                 <span>发送</span>
@@ -2232,6 +2844,22 @@ export function AiCollaborationPanel({
         onCancel={() => {
           setDirtyApplyConfirmOpen(false);
           setPendingApplyPaths(undefined);
+        }}
+      />
+      <ChapterBatchStartModal
+        open={batchModalOpen}
+        fromChapter={batchFromChapter}
+        toChapter={batchToChapter}
+        error={batchError}
+        pending={batchStarting}
+        onChangeFrom={setBatchFromChapter}
+        onChangeTo={setBatchToChapter}
+        onSubmit={() => void startBatchRun()}
+        onCancel={() => {
+          if (!batchStarting) {
+            setBatchModalOpen(false);
+            setBatchError(null);
+          }
         }}
       />
     </aside>

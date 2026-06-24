@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply } from "fastify";
 import {
   convertToModelMessages,
@@ -25,6 +24,7 @@ import {
   PLOT_FILE,
   PROJECT_FILE_PATH_MAX_LEN,
   PROJECT_FILE_PATH_REGEX,
+  STYLE_SAMPLE_FILE,
   STORY_STATUS_FILE,
   type AiWorkspaceUsageDiagnostics,
   type AiPresetPromptSection,
@@ -55,13 +55,7 @@ import {
   readProjectFile,
   writeProjectFile,
 } from "../books/storage.js";
-
-const llmProvider = createOpenAICompatible({
-  name: env.LLM_PROVIDER,
-  apiKey: env.LLM_API_KEY ?? "",
-  baseURL: env.LLM_BASE_URL,
-  includeUsage: true,
-});
+import { assertModelConfigured, llmProvider } from "../ai/modelClient.js";
 
 const IdSchema = z.string().regex(BOOK_ID_REGEX);
 const AgentIdSchema = z.string().regex(AI_AGENT_ID_REGEX);
@@ -116,6 +110,7 @@ export const AI_WORKSPACE_BASE_SYSTEM_PROMPT_LINES = [
   "创建新的 Markdown 文件时，文件名必须使用中文标题或中文专名，例如 library/characters/林晚.md、library/world/青岚宗.md、library/items/玄铁令.md；不要使用英文 slug、拼音或无意义编号。",
   "资料库、剧情状态、大纲和规划内容默认采用轻量写法：只记录当前任务需要的稳定事实、限制、关系和待补充项；不要为完整感生成长篇背景、百科式历史或重复解释，除非用户明确要求详细展开。",
   `${NOVEL_SPEC_FILE} 记录本书长期结构、篇幅、文风、禁忌和创意规则；写作、续写、重整大纲、改写或审阅前优先读取它。`,
+  `${STYLE_SAMPLE_FILE} 记录本书写作风格样例；生成细纲、正文续写或改写时，若存在应读取并参考其语感、节奏、对白方式和描写密度，但不得复用具体原句、剧情或人物关系。`,
   `${PLOT_FILE} 记录剧情走向、主线支线、阶段规划、剧情点子、伏笔回收、冲突反转和待确认剧情问题。`,
   `${NOVEL_SPEC_FILE} 规定怎么写；${PLOT_FILE} 规定故事往哪里走；library/、outline/、chapters/ 和用户最新指令提供事实依据。`,
   "写作、续写、重整大纲、改写或审阅前，先确认任务范围，再列目录并读取必要的创作规格、资料库、大纲、正文和创作快照。",
@@ -585,7 +580,9 @@ async function stageDraftWrite(
 ): Promise<ProjectFileDoc> {
   const existingDraft = run.drafts.get(projectPath);
   if (options.createOnly && existingDraft) {
-    throw new ConflictError(`Project path already exists in draft: ${projectPath}`);
+    throw new ConflictError(
+      `Project path already exists in draft: ${projectPath}`,
+    );
   }
   if (existingDraft) {
     existingDraft.draftContent = content;
@@ -619,7 +616,9 @@ async function stageDraftWrite(
   return draftDocFromContent(projectPath, content, now);
 }
 
-function buildPendingChanges(run: AiWorkspaceRunInternal): AiDraftChangeSet | undefined {
+function buildPendingChanges(
+  run: AiWorkspaceRunInternal,
+): AiDraftChangeSet | undefined {
   const files = [...run.drafts.values()]
     .filter((draft) => draft.baseContent !== draft.draftContent)
     .sort((a, b) => a.path.localeCompare(b.path))
@@ -666,13 +665,17 @@ function filterAiReadableProjectFileNodes(
 
 function assertAiCanReadProjectPath(projectPath: string): void {
   if (isOutlineArchivePath(projectPath)) {
-    throw new InvalidIdError("Archived outline files are not readable by AI tools");
+    throw new InvalidIdError(
+      "Archived outline files are not readable by AI tools",
+    );
   }
 }
 
 function assertAiCanChangeProjectPath(projectPath: string): void {
   if (isOutlineArchivePath(projectPath)) {
-    throw new InvalidIdError("Archived outline files are not writable by AI tools");
+    throw new InvalidIdError(
+      "Archived outline files are not writable by AI tools",
+    );
   }
 }
 
@@ -1248,9 +1251,14 @@ const AI_WORKSPACE_TOOL_DEFINITIONS: AiWorkspaceToolDefinition[] = [
             title: "创建项目文件",
             detail: `AI 正在创建 ${parsedPath}。`,
           });
-          const result = await stageDraftWrite(run, parsedPath, parsedContent ?? "", {
-            createOnly: true,
-          });
+          const result = await stageDraftWrite(
+            run,
+            parsedPath,
+            parsedContent ?? "",
+            {
+              createOnly: true,
+            },
+          );
           const operation: ProjectFileOperation = {
             type: "create_file",
             path: parsedPath,
@@ -1368,14 +1376,6 @@ function buildRoleplayPrompt(characterTitle: string): string {
     "本模式默认只读，不得调用写入或创建文件工具，不得修改小说项目文件。",
     "如果人物卡或项目文件没有相关信息，明确说明未知，不要伪装成已存在事实；可以基于已读资料给出合理推测并标注为推测。",
   ].join("\n");
-}
-
-function assertModelConfigured(): void {
-  if (!env.LLM_API_KEY) {
-    throw new InvalidIdError(
-      "AI 功能需要先在仓库根目录 .env 中配置 LLM_API_KEY；也兼容旧配置 DEEPSEEK_API_KEY。书籍管理等非 AI 接口不需要该配置。",
-    );
-  }
 }
 
 async function prepareAiWorkspaceContext({

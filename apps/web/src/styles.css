@@ -999,6 +999,16 @@ textarea { width: 100%; min-height: 110px; padding: 10px 11px; resize: vertical;
 .ai-run-summary { margin: 0; padding: 5px 0 1px; color: #52525b; font-size: 11px; overflow-wrap: anywhere; }
 .ai-usage-summary { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
 .ai-usage-summary span { display: inline-flex; align-items: center; min-height: 21px; padding: 3px 7px; border: 1px solid #e4e4e7; border-radius: 999px; background: #ffffff; color: #52525b; font-size: 10px; font-weight: 500; line-height: 1.2; }
+.ai-batch-modal-note {
+  padding: 8px 9px;
+  border: 1px solid #e4e4e7;
+  border-radius: 10px;
+  background: #fafafa;
+  color: #52525b;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.chapter-batch-form { gap: 10px; }
 .ai-draft-review {
   flex: 0 0 auto;
   display: grid;

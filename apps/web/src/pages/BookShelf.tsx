@@ -184,7 +184,7 @@ export function BookShelf({ onOpen }: BookShelfProps) {
       <PromptModal
         open={createOpen}
         title="新建书籍"
-        description="创建后会自动生成 idea.md、plot.md、novel-spec.md、大纲、状态和资料库骨架。"
+        description="创建后会自动生成 idea.md、plot.md、novel-spec.md、style-sample.md、大纲、状态和资料库骨架。"
         label="书名"
         value={createTitle}
         placeholder="例如：雾城来信"

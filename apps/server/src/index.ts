@@ -8,6 +8,7 @@ import { aiAgentsRoutes } from "./routes/aiAgents.js";
 import { aiPresetsRoutes } from "./routes/aiPresets.js";
 import { aiWorkspaceRoutes } from "./routes/aiWorkspace.js";
 import { aiSessionsRoutes } from "./routes/aiSessions.js";
+import { chapterBatchRunRoutes } from "./routes/chapterBatchRuns.js";
 import { knowledgeBaseRoutes } from "./routes/knowledgeBase.js";
 
 const SERVER_BODY_LIMIT_BYTES = 64 * 1024 * 1024;
@@ -77,6 +78,7 @@ async function main() {
     await app.register(aiPresetsRoutes);
     await app.register(aiSessionsRoutes);
     await app.register(aiWorkspaceRoutes);
+    await app.register(chapterBatchRunRoutes);
     await app.register(knowledgeBaseRoutes);
 
     app.get("/api/health", async () => ({ ok: true }));

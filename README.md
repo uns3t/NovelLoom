@@ -129,12 +129,14 @@ data/books
 
 1. 启动开发服务后打开前端页面。
 2. 在书籍管理中创建一本书。
-3. 进入创作台，编辑 `idea.md`、`plot.md`、`novel-spec.md`、`story-status.md`、`outline/current.md` 或章节文件。
+3. 进入创作台，编辑 `idea.md`、`plot.md`、`novel-spec.md`、`style-sample.md`、`story-status.md`、`outline/current.md` 或章节文件。
 4. 在资料库中维护人物、世界观和物品素材。
 5. 配置模型后，在 AI 协作面板中使用快捷命令或自定义输入辅助创作。
 6. 审阅 AI 生成的文件草稿变更，确认接受后再落盘到本地文件。
 
-新建书籍时，后端会生成基础项目文件，包括 `book.json`、`chapters/`、`idea.md`、`plot.md`、`novel-spec.md`、`story-status.md` 和 `outline/`。
+新建书籍时，后端会生成基础项目文件，包括 `book.json`、`chapters/`、`idea.md`、`plot.md`、`novel-spec.md`、`style-sample.md`、`story-status.md` 和 `outline/`。
+
+`style-sample.md` 用于保存写作风格样例，推荐放 1500-2500 字认可正文，并由 AI 在生成细纲、续写正文和改写润色时参考语感、节奏、对白方式和描写密度。
 
 ## AI 模型配置
 
