@@ -1,0 +1,52 @@
+apps/server/src/routes/aiWorkspace.ts
+  h_458067ff9edf5c 27,58,113,584,620,669,677,1260
+apps/web/src/components/AiCollaborationPanel.tsx
+  h_458067ff9edf5c 4,19,38-43,140-166,217-219,318-386,1386-1474,1521-1528,1547,1818,1827-1828,1903,1983-2102,2107,2184-2399,2595,2598-2616,2732,2794,2798,2802,2805,2808,2849-2858
+packages/shared/src/index.ts
+  h_458067ff9edf5c 1026 gitai:{"mixed_line_ranges":[{"Single":1026}],"operations":[]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "cf64dcd483f0171c6b00e6e8ddf799ac553db0da",
+  "prompts": {},
+  "humans": {
+    "h_458067ff9edf5c": {
+      "author": "zhangshiyu.0 <32424222+uns3t@users.noreply.github.com>"
+    }
+  },
+  "attestation_metadata": {
+    "packages/shared/src/index.ts": [
+      {
+        "hash": "h_458067ff9edf5c",
+        "line_ranges": [
+          {
+            "Single": 1026
+          }
+        ],
+        "mixed_line_ranges": [
+          {
+            "Single": 1026
+          }
+        ],
+        "operations": []
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "s_a61011c213cac4": {
+      "tool": "trae",
+      "conversation_id": "6a290a3cf9f5e083cc548cac",
+      "session_id": "6a290a3cf9f5e083cc548cac",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_a61011c213cac4::t_697caaa25bc9a9": {
+      "tool": "trae",
+      "conversation_id": "6a290a3cf9f5e083cc548cac",
+      "session_id": "6a290a3cf9f5e083cc548cac",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
